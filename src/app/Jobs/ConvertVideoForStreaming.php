@@ -11,12 +11,14 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use ProtoneMedia\LaravelFFMpeg\Support\FFMpeg;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class ConvertVideoForStreaming implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $video;
+
     public $timeout = 3600;
 
     public function __construct(Video $video)
@@ -26,35 +28,57 @@ class ConvertVideoForStreaming implements ShouldQueue
 
     public function handle(): void
     {
-        // 1. Cập nhật trạng thái đang xử lý
-        $this->video->update(['status' => 'processing']);
+        $jobStart = microtime(true);
 
-        // 2. Cấu hình độ phân giải và bitrate cho video đầu ra (chuẩn X264)
-        $lowBitrate  = (new X264)->setKiloBitrate(250);
-        $midBitrate  = (new X264)->setKiloBitrate(500);
+        $this->video->update([
+            'status' => 'processing',
+            'processing_started_at' => now(),
+        ]);
+
+        Log::info('VIDEO_PROCESSING_STARTED', [
+            'video_id' => $this->video->id,
+        ]);
+
+        $lowBitrate = (new X264)->setKiloBitrate(250);
+        $midBitrate = (new X264)->setKiloBitrate(500);
         $highBitrate = (new X264)->setKiloBitrate(1000);
 
-        // Định nghĩa thư mục lưu trữ trên MinIO dựa theo ID của video
         $hlsFolder = 'hls/' . $this->video->id;
         $hlsPlaylist = $hlsFolder . '/playlist.m3u8';
 
-        // 3. Tiến hành băm video gốc sang chuẩn HLS truyền phát trực tuyến
         FFMpeg::fromDisk('local')
             ->open($this->video->original_path)
             ->exportForHLS()
             ->toDisk('minio')
-            ->addFormat($lowBitrate)
-            ->addFormat($midBitrate)
-            ->addFormat($highBitrate)
+            ->addFormat($lowBitrate, function ($media) {
+                $media->addFilter('scale=-2:360');
+            })
+            ->addFormat($midBitrate, function ($media) {
+                $media->addFilter('scale=-2:480');
+            })
+            ->addFormat($highBitrate, function ($media) {
+                $media->addFilter('scale=-2:720');
+            })
             ->save($hlsPlaylist);
 
-        // 4. Cập nhật đường dẫn file m3u8 và chuyển trạng thái hoàn thành
+        $totalSeconds = round(
+            microtime(true) - $jobStart,
+            2
+        );
+
         $this->video->update([
             'hls_path' => $hlsPlaylist,
-            'status' => 'completed'
+            'status' => 'completed',
+            'completed_at' => now(),
+            'processing_seconds' => $totalSeconds,
         ]);
 
-        // 5. Xóa file video gốc ở thư mục tạm trên local để tránh đầy ổ cứng
-        Storage::disk('local')->delete($this->video->original_path);
+        Log::info('VIDEO_PROCESSING_COMPLETED', [
+            'video_id' => $this->video->id,
+            'seconds' => $totalSeconds,
+        ]);
+
+        Storage::disk('local')
+            ->delete($this->video->original_path);
     }
 }

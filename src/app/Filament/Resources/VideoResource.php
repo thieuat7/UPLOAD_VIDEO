@@ -74,6 +74,10 @@ class VideoResource extends Resource
                     ->label('Created At')
                     ->dateTime()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('processing_seconds')
+                    ->label('Total Time')
+                    ->suffix(' sec')
+                    ->sortable(),
             ])
             ->filters([
                 //
