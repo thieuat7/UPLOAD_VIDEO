@@ -28,7 +28,7 @@ services:
     depends_on:
       - app
 
-  # 3. Queue Worker (xử lý job / FFmpeg)
+  # 3. Queue Worker (xử lý job / FFmpeg nén video)
   queue:
     build:
       context: .
@@ -82,6 +82,42 @@ services:
     command: server /data --console-address ":9001"
     networks:
       - laravel_network
+
+  # 6. Tự động khởi tạo Bucket và cấu hình quyền Public cho MinIO
+  minio-init:
+    image: minio/mc
+    container_name: laravel_minio_init
+    restart: "no"
+    depends_on:
+      - minio
+    env_file:
+      - ./src/.env
+    networks:
+      - laravel_network
+    entrypoint: >
+      sh -c "
+        echo '⏳ Waiting for MinIO to start...';
+        sleep 5;
+        
+        # Cấu hình kết nối local alias thông qua mạng nội bộ Docker (endpoint 'minio:9000')
+        mc alias set local http://minio:9000 \$AWS_ACCESS_KEY_ID \$AWS_SECRET_ACCESS_KEY;
+        
+        # Kiểm tra và tạo bucket nếu chưa có (không ảnh hưởng nếu đã tồn tại)
+        if ! mc ls local/\$AWS_BUCKET > /dev/null 2>&1; then
+          echo '📁 Creating bucket: \$AWS_BUCKET...';
+          mc mb local/\$AWS_BUCKET;
+        else
+          echo '✅ Bucket \$AWS_BUCKET already exists.';
+        fi
+        
+        # Ép quyền Public (download) để sửa triệt để lỗi 403 trên trình duyệt
+        echo '🔓 Setting bucket policy to public (download)...';
+        mc anonymous set download local/\$AWS_BUCKET;
+        
+        echo '🏁 MinIO auto-configuration done!';
+      "
+
+  # 7. Khởi tạo Database (Key generate & Migrate)
   init:
     build:
       context: .
