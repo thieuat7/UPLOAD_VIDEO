@@ -26,6 +26,9 @@ RUN docker-php-ext-install \
     intl \
     zip
 
+# Cài đặt extension Redis cho PHP
+RUN pecl install redis && docker-php-ext-enable redis
+
 # Cài Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

@@ -12,6 +12,9 @@ services:
       - ./src:/var/www
     networks:
       - laravel_network
+    depends_on:
+      - db
+      - redis # Đảm bảo Redis chạy trước App
 
   # 2. Container Web Server Nginx
   web:
@@ -45,8 +48,24 @@ services:
     depends_on:
       - app
       - db
+      - redis # Queue phải đợi Redis lên thì mới làm việc được
 
-  # 4. MySQL Database
+  # 4. Redis (Đã sửa network và tên volume để đồng bộ)
+  redis:
+    image: 'redis:alpine'
+    container_name: laravel_redis
+    ports:
+      - '${FORWARD_REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data # Đã đổi tên cho đồng bộ với các volume khác
+    networks:
+      - laravel_network  # <-- Quan trọng: Chuyển về mạng chung của hệ thống
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      retries: 3
+      timeout: 5s
+
+  # 5. MySQL Database
   db:
     image: mysql:8.0
     container_name: laravel_db
@@ -63,7 +82,7 @@ services:
     networks:
       - laravel_network
 
-  # 5. MinIO (S3 local storage)
+  # 6. MinIO (S3 local storage)
   minio:
     image: minio/minio
     container_name: laravel_minio
@@ -83,7 +102,7 @@ services:
     networks:
       - laravel_network
 
-  # 6. Tự động khởi tạo Bucket và cấu hình quyền Public cho MinIO
+  # 7. Tự động khởi tạo Bucket và cấu hình quyền Public cho MinIO
   minio-init:
     image: minio/mc
     container_name: laravel_minio_init
@@ -100,24 +119,24 @@ services:
         sleep 5;
         
         # Cấu hình kết nối local alias thông qua mạng nội bộ Docker (endpoint 'minio:9000')
-        mc alias set local http://minio:9000 \$AWS_ACCESS_KEY_ID \$AWS_SECRET_ACCESS_KEY;
+        mc alias set local http://minio:9000 \$$AWS_ACCESS_KEY_ID \$$AWS_SECRET_ACCESS_KEY;
         
         # Kiểm tra và tạo bucket nếu chưa có (không ảnh hưởng nếu đã tồn tại)
-        if ! mc ls local/\$AWS_BUCKET > /dev/null 2>&1; then
-          echo '📁 Creating bucket: \$AWS_BUCKET...';
-          mc mb local/\$AWS_BUCKET;
+        if ! mc ls local/\$$AWS_BUCKET > /dev/null 2>&1; then
+          echo '📁 Creating bucket: \$$AWS_BUCKET...';
+          mc mb local/\$$AWS_BUCKET;
         else
-          echo '✅ Bucket \$AWS_BUCKET already exists.';
+          echo '✅ Bucket \$$AWS_BUCKET already exists.';
         fi
         
         # Ép quyền Public (download) để sửa triệt để lỗi 403 trên trình duyệt
         echo '🔓 Setting bucket policy to public (download)...';
-        mc anonymous set download local/\$AWS_BUCKET;
+        mc anonymous set download local/\$$AWS_BUCKET;
         
         echo '🏁 MinIO auto-configuration done!';
       "
 
-  # 7. Khởi tạo Database (Key generate & Migrate)
+  # 8. Khởi tạo Database (Key generate & Migrate)
   init:
     build:
       context: .
@@ -149,3 +168,4 @@ networks:
 volumes:
   db_data:
   minio_data:
+  redis_data:
